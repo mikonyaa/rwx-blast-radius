@@ -24,6 +24,8 @@ from token_config import ByteConfig
 from trie_profile import TrieProfile
 from exception_profile import ExceptionProfile
 from type_guard import TypeGuardProfile
+from cold_profile import ColdCoverage
+from global_reads import GlobalReads
 import fixture_impact
 import semantic
 import parser_tables
@@ -235,6 +237,8 @@ class Impact:
         self.map_directory = map_path.parent
         self.default_profile = DefaultProfile(map_path.parent, self.tests)
         self.callbacks = CallbackProfile(map_path.parent, self.tests)
+        self.cold = ColdCoverage(map_path.parent, self.tests)
+        self.global_reads = GlobalReads(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
         self.trace = Trace(map_path, self.tests)
@@ -303,9 +307,10 @@ class Impact:
                     # A cached value may have changed before any observed test ran.
                     # A partial query replay cannot validate those initialization effects.
                     uncertain_initialization = True
-                    selected.update(self.dependents(before))
-                else:
-                    selected.update(file_tests)
+                    file_tests = self.dependents(before)
+                if len(edits) == 1:
+                    file_tests = self.cold.filter(self, before, source, new, blocks, file_tests)
+                selected.update(file_tests)
         except (ValueError, OSError, RecursionError):
             # An unrecognized form (e.g. binary/rename-only diff) must remain conservative.
             return Analysis({}, self.all.copy())
@@ -353,6 +358,10 @@ class Impact:
                 observed = self.default_profile.candidates(path, syntax.tree, new, blocks, self.import_trace)
                 if observed is not None:
                     return observed | reads | self.trace.incomplete
+        if single_file:
+            consumers = self.global_reads.match(path, syntax.tree, new, blocks)
+            if consumers is not None:
+                return consumers | reads | self.trace.incomplete
         original_blocks = blocks
         neutral = [b for b in blocks if all(not line.strip() or line.lstrip().startswith("#")
                                              for line in [*b[1], *b[2]])]
