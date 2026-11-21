@@ -14,6 +14,7 @@ from textwrap import dedent
 from types import CodeType
 
 from branch_impact import changed_branch
+from default_profile import DefaultProfile
 from lazy_exports import LazyExports
 from load_envelope import LoadEnvelope, data_field_change
 from module_impact import ModuleImpact, same_imports
@@ -230,6 +231,7 @@ class Impact:
             self.files[test["file"]].add(test["number"])
         map_path = Path(map_path or Path(__file__).with_name("maps") / "coverage.json.gz")
         self.map_directory = map_path.parent
+        self.default_profile = DefaultProfile(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
         self.trace = Trace(map_path, self.tests)
@@ -340,6 +342,13 @@ class Impact:
         if path not in self.syntax:
             self.syntax[path] = Syntax(old, path)
         syntax = self.syntax[path]
+        if single_file and self.import_trace and len(blocks) == 1:
+            line = blocks[0][0]
+            scope, _ = syntax.contexts(line)
+            if isinstance(scope, ast.FunctionDef) and line <= scope.body[0].lineno:
+                observed = self.default_profile.candidates(path, syntax.tree, new, blocks, self.import_trace)
+                if observed is not None:
+                    return observed | reads | self.trace.incomplete
         original_blocks = blocks
         neutral = [b for b in blocks if all(not line.strip() or line.lstrip().startswith("#")
                                              for line in [*b[1], *b[2]])]
