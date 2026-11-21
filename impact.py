@@ -318,7 +318,7 @@ class Impact:
         reads = self.trace.test_numbers(self.trace.reads.get(path, 0))
         if not path.endswith(".py"):
             if path in self.trace.reads:
-                reads = fixture_impact.narrow(self.root, self.map_directory, path, old, new, reads, self.by_id)
+                reads = fixture_impact.narrow(self.root, self.map_directory, path, old, new, reads, self.by_id, single_file)
                 return reads | self.trace.incomplete
             return self.all.copy() if path.startswith(("sqlglot/", "tests/")) else reads
 

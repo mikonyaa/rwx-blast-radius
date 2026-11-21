@@ -246,6 +246,40 @@ def _changed_lines(base, replacements):
     return lines
 
 
+@lru_cache(maxsize=2)
+def fixture_tags(source):
+    from fixture_impact import fixture_fields
+    return {path: field[:-5] for field, path in fixture_fields(Path(source)).items()
+            if field.endswith("_sqls") and field[:-5] in TESTS.values()}
+
+
+def fixture_plan(source, replacements, candidates, tests):
+    """Replay changed input rows when the remaining independent pool jobs are identical."""
+    from fixture_impact import comparable_rows, fixture_rows, helper
+    if len(replacements) != 1:
+        return []
+    path, content = next(iter(replacements.items()))
+    tag = fixture_tags(source).get(path)
+    if not tag or not isinstance(content, str):
+        return []
+    number = next((n for n in candidates if TESTS.get(tests[n]["id"]) == tag), None)
+    if number is None:
+        return []
+    original = (Path(source) / path).read_text()
+    module = helper(source)
+    old, new = fixture_rows(module, path, original), fixture_rows(module, path, content)
+    if not comparable_rows(old, new):
+        return []
+    indices = [i for i, (a, b) in enumerate(zip(old, new)) if a[:2] != b[:2]]
+    data = _map()
+    if not indices or not data or len(data["times"][tag]) != len(new):
+        return []
+    duration = sum(data["times"][tag][i] for i in indices)
+    if duration > min(2.0, 0.3 * tests[number]["seconds"]):
+        return []
+    return [(number, tag, indices)]
+
+
 def plan(source, replacements, candidates, tests):
     eligible = [(n, TESTS[tests[n]["id"]]) for n in candidates if tests[n]["id"] in TESTS]
     if not eligible or not (data := _map()):

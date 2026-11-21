@@ -181,15 +181,21 @@ def refine(source_root, replacements, candidates, tests, budget=None):
         return chosen
     if any(content is None for content in replacements.values()):
         return chosen
-    if not all(path.endswith(".py") for path in replacements):
-        return chosen
     try:
-        shards = query_probe.plan(source_root, replacements, chosen, tests)
+        python_only = all(path.endswith(".py") for path in replacements)
+        if python_only:
+            shards = query_probe.plan(source_root, replacements, chosen, tests)
+        elif len(replacements) == 1 and next(iter(replacements)).endswith(".sql"):
+            shards = query_probe.fixture_plan(source_root, replacements, chosen, tests)
+            if not shards:
+                return chosen
+        else:
+            return chosen
         # An untouched query set is already proved by pristine per-query coverage.
         chosen.difference_update(number for number, _, indices in shards if not indices)
         specialized = {number for number, _, _ in shards}
         shards = [shard for shard in shards if shard[2]]
-        records = [tests[number] for number in chosen if number not in specialized]
+        records = [tests[number] for number in chosen if number not in specialized] if python_only else []
         if budget is None:
             # Initializing DuckDB and the fixture worker pool costs more than
             # these small selections usually save. Their TPC shards are handled
