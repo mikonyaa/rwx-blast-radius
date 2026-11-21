@@ -11,6 +11,7 @@ from packing import pack
 from padding import Padding
 from probe import refine
 import optimizer_replay
+from token_boundary import refine_patch
 
 
 def main():
@@ -47,6 +48,7 @@ def main():
                 analysis = impact.analyze(patch)
                 chosen = analysis.tests
                 if not args.without_probes and time_left > 6:
+                    chosen = refine_patch(impact, patch, analysis, chosen, by_number)
                     chosen = refine(args.source, analysis.paths, chosen, by_number)
                     if start + limit - time.monotonic() > 10:
                         chosen = optimizer_replay.refine(args.source, analysis.paths, chosen, by_number)

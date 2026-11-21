@@ -161,7 +161,7 @@ def isolated_numbers(view, fn, args, limit, cpu_limit, base=None):
                     pass
         os.waitpid(pid, 0)
         os.close(reader)
-    return {int(number) for number in buffer.splitlines() if number.isdigit()}
+    return {int(number) for number in buffer.split(b"\n")[:-1] if number.isdigit()}
 
 
 def _schedule_cost(numbers, seconds):
