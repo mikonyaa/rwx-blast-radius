@@ -15,6 +15,7 @@ from types import CodeType
 
 from branch_impact import changed_branch
 from default_profile import DefaultProfile
+from callback_profile import CallbackProfile
 from lazy_exports import LazyExports
 from load_envelope import LoadEnvelope, data_field_change
 from module_impact import ModuleImpact, same_imports
@@ -233,6 +234,7 @@ class Impact:
         map_path = Path(map_path or Path(__file__).with_name("maps") / "coverage.json.gz")
         self.map_directory = map_path.parent
         self.default_profile = DefaultProfile(map_path.parent, self.tests)
+        self.callbacks = CallbackProfile(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
         self.trace = Trace(map_path, self.tests)
@@ -427,12 +429,19 @@ class Impact:
             if proven is not None:
                 return proven | reads | self.trace.incomplete
             if registry:
-                return None
+                seen = self.callbacks.candidates(path, syntax, new, original_blocks) if single_file else None
+                return None if seen is None else seen | reads | self.trace.incomplete
         anchor = changed_branch(syntax.tree, new, original_blocks)
         if anchor is not None:
             mask = self.trace.lines.get(path, {}).get(anchor, 0)
             return self.trace.test_numbers(mask) | reads | self.trace.incomplete
         candidates = self.from_positions(path, syntax, blocks, new, new_positions)
+        if single_file:
+            seen = self.callbacks.candidates(path, syntax, new, original_blocks)
+            if seen is not None:
+                # A deferred callback can be invoked from a copied dispatch table,
+                # independent of coverage at the line where the table was built.
+                candidates = seen
         if self.comparison and all(len(removed) == len(added) == 1
                                    and COMPARISON.search(removed[0])
                                    and COMPARISON.search(added[0])
