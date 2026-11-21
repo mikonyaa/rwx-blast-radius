@@ -23,6 +23,7 @@ from module_impact import ModuleImpact, same_imports
 from tokenizer_impact import TokenizerImpact
 from token_config import ByteConfig
 from trie_profile import TrieProfile
+from expression_impact import ExpressionImpact
 from exception_profile import ExceptionProfile
 from type_guard import TypeGuardProfile
 from cold_profile import ColdCoverage
@@ -241,6 +242,7 @@ class Impact:
         self.cold = ColdCoverage(map_path.parent, self.tests)
         self.global_reads = GlobalReads(map_path.parent, self.tests)
         self.scanner_fields = ScannerFields(map_path.parent, self.tests)
+        self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
         self.trace = Trace(map_path, self.tests)
@@ -455,6 +457,16 @@ class Impact:
             mask = self.trace.lines.get(path, {}).get(anchor, 0)
             return self.trace.test_numbers(mask) | reads | self.trace.incomplete
         candidates = self.from_positions(path, syntax, blocks, new, new_positions)
+        expression_hits = self.expression_profile.consumers(path, syntax.tree, new, original_blocks, during_import)
+        # A registry can copy a callback during import and invoke it later
+        # without re-executing the declaration line. Its instruction trace
+        # remains authoritative even when line coverage recorded no caller.
+        lambda_scope = isinstance(syntax.contexts(site)[0], ast.Lambda)
+        if expression_hits is not None:
+            if lambda_scope:
+                candidates = expression_hits
+            else:
+                candidates.intersection_update(expression_hits)
         if self.comparison and all(len(removed) == len(added) == 1
                                    and COMPARISON.search(removed[0])
                                    and COMPARISON.search(added[0])
