@@ -10,6 +10,7 @@ from impact import Impact
 from packing import pack
 from padding import Padding
 from probe import refine
+import optimizer_replay
 
 
 def main():
@@ -47,6 +48,8 @@ def main():
                 chosen = analysis.tests
                 if not args.without_probes and time_left > 6:
                     chosen = refine(args.source, analysis.paths, chosen, by_number)
+                    if start + limit - time.monotonic() > 10:
+                        chosen = optimizer_replay.refine(args.source, analysis.paths, chosen, by_number)
                 if time_left > 9:
                     chosen = guard.augment(patch, analysis, chosen)
             except (OSError, ValueError, SyntaxError, KeyError, IndexError, RecursionError) as exc:
