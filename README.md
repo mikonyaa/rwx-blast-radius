@@ -20,6 +20,8 @@ This builds the pinned `linux/amd64` image, starts three fresh containers with t
 4. When economical, execute candidate tests in a fresh child against the patched source, and drop confirmed passes. The parent preserves candidates when validation is inconclusive or its time budget expires. An unsupported change can fall back to the full suite.
 5. Compare worker counts from one to eight. For each promising count, place longest tests first on the least loaded worker and refine small assignments with a bounded search. The objective includes the 2-second cost of each worker.
 
+The additional profiles in `maps/` record observations on the unmodified pinned source. They cover module imports, package-attribute access, parser and tokenizer table lookups, types seen by guards and exception handlers, SQL fixture use, and serialization. The selector translates pytest IDs to the supplied catalog on each run. Where a changed test selection leaves spare capacity on a worker, it schedules additional tests within the same maximum load.
+
 ## Contents
 
 - `selector.py`, `impact.py` and `packing.py` implement the contest entry point, selection and scheduling.

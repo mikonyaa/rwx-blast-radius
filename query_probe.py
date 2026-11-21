@@ -17,6 +17,8 @@ import sys
 import time
 from multiprocessing.reduction import ForkingPickler
 
+import serialization_probe
+
 
 TESTS = {
     "tests/test_executor.py::TestExecutor::test_execute_tpcds": "tpcds",
@@ -82,8 +84,18 @@ def probe_rows(results):
 
     passed = []
     for number, tag, indices in results:
+        source = None
+        if isinstance(tag, tuple):
+            tag, source = tag
         folder_name = "tpc-h" if tag == "tpch" else "tpc-ds"
         sqls = list(load_sql_fixture_pairs(f"optimizer/{folder_name}/{folder_name}.sql"))
+        if source is not None:
+            try:
+                if serialization_probe.same_inputs(source, sqls):
+                    passed.append(number)
+            except Exception:
+                pass
+            continue
         # mp_execute returns immediately for these queries. They still cross the
         # process boundary, so their expression serialization must succeed.
         if all(not sqls[i][0].get("execute") for i in indices):
@@ -244,12 +256,24 @@ def plan(source, replacements, candidates, tests):
     maps = data["lines"]
     if any(line in maps["setup"].get(path, {}) for path, line in changed):
         return []
+    transport = serialization_probe.eligible(source, replacements) or set()
     plans = []
     for number, tag in eligible:
+        if tag in transport:
+            plans.append((number, (tag, str(Path(source).resolve())), list(range(len(data["times"][tag])))))
+            continue
         mask = 0
         for path, line in changed:
             mask |= maps[tag].get(path, {}).get(line, 0)
-        indices = [i for i in range(mask.bit_length()) if mask & (1 << i)]
+        # Cheap suites can replay every fixture and detect order/serialization
+        # effects. A zero intersection on a costly suite conflicts with the
+        # outer selector's evidence; keep that candidate without further proof.
+        if sum(data["times"][tag]) <= 0.5:
+            indices = list(range(len(data["times"][tag])))
+        elif mask:
+            indices = [i for i in range(mask.bit_length()) if mask & (1 << i)]
+        else:
+            continue
         estimate = sum(data["times"][tag][i] for i in indices)
         if estimate < min(3.0, 0.35 * tests[number]["seconds"]):
             plans.append((number, tag, indices))

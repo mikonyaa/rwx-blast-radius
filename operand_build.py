@@ -18,6 +18,7 @@ OPS = {"Eq": operator.eq, "NotEq": operator.ne, "Is": operator.is_,
        "Gt": operator.gt, "GtE": operator.ge}
 locations = []
 observations = []
+scalar_observations = []
 current = -1
 complete = set()
 unsafe = set()
@@ -46,6 +47,17 @@ def relation(x, y):
 def observe(site, op, x, y):
     outcome = OPS[op](x, y)
     observations[site].setdefault(relation(x, y), set()).add(current)
+    if scalar_observations[site] is not None:
+        groups = scalar_observations[site]
+        if type(x) is int and x.bit_length() < 40:
+            key = "i" + str(x)
+        elif type(x) is str and len(x) <= 60:
+            key = "s" + x
+        else:
+            key = "?"
+        if len(groups) >= 100 and key not in groups:
+            key = "?"
+        groups.setdefault(key, set()).add(current)
     return outcome
 
 
@@ -61,13 +73,14 @@ class Instrument(ast.NodeTransformer):
         rhs = node.comparators[0]
         if op not in OPS or not (
             isinstance(rhs, ast.Attribute) and rhs.attr.isupper() or
-            isinstance(rhs, ast.Constant) and (rhs.value is None or type(rhs.value) is int) or
+            isinstance(rhs, ast.Constant) and (rhs.value is None or type(rhs.value) in (int, str)) or
             isinstance(rhs, ast.Tuple) and all(isinstance(v, ast.Constant) and type(v.value) is int for v in rhs.elts)
         ):
             return node
         site = len(locations)
         locations.append((self.path, f"{node.lineno}:{node.col_offset}"))
         observations.append({})
+        scalar_observations.append({} if isinstance(rhs, ast.Constant) and type(rhs.value) in (int, str) else None)
         call = ast.Call(ast.Name("_rwx_operand", ast.Load()),
                         [ast.Constant(site), ast.Constant(op), node.left, rhs], [])
         return ast.copy_location(call, node)
@@ -143,9 +156,18 @@ if __name__ == "__main__":
         entry = files.setdefault(path, {}).setdefault(spot, {})
         for state, group in states.items():
             entry.setdefault(",".join(map(str, state)), set()).update(group)
+    scalars = {}
+    for (path, spot), groups in zip(locations, scalar_observations):
+        if groups is not None:
+            out = scalars.setdefault(path, {}).setdefault(spot, {})
+            for key, group in groups.items():
+                out.setdefault(key, set()).update(group)
+    for sites in scalars.values():
+        for pos, groups in sites.items():
+            sites[pos] = {k: sorted(v) for k, v in groups.items()}
     for sites in files.values():
         for pos, states in sites.items():
             sites[pos] = {key: sorted(v) for key, v in states.items()}
     with gzip.open(output, "wt", compresslevel=6) as f:
-        json.dump({"ids": ids, "complete": sorted(complete), "files": files}, f, separators=(",", ":"))
+        json.dump({"ids": ids, "complete": sorted(complete), "files": files, "scalars": scalars}, f, separators=(",", ":"))
     print(f"{len(complete)} complete tests, map {output.stat().st_size} bytes")

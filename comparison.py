@@ -2,8 +2,11 @@
 import ast
 import gzip
 import json
+import operator
 from pathlib import Path
 
+ORDER = {"Eq": operator.eq, "NotEq": operator.ne, "Lt": operator.lt, "LtE": operator.le,
+         "Gt": operator.gt, "GtE": operator.ge}
 NAMES = {"Eq", "NotEq", "Is", "IsNot", "Lt", "LtE", "Gt", "GtE"}
 
 
@@ -36,8 +39,14 @@ def changed_operator(before, after):
                     return False
                 rhs = a.comparators[0]
                 none_rhs = isinstance(rhs, ast.Constant) and rhs.value is None
-                differences.append((f"{a.lineno}:{a.col_offset}", x, y, none_rhs))
+                differences.append((f"{a.lineno}:{a.col_offset}", x, y, none_rhs, None))
                 return scan(a.left, b.left) and scan(a.comparators, b.comparators)
+            ar, br = a.comparators[0], b.comparators[0]
+            if (x == y and x in ORDER and isinstance(ar, ast.Constant) and isinstance(br, ast.Constant)
+                    and type(ar.value) is type(br.value) and type(ar.value) in (str, int)
+                    and ar.value != br.value):
+                differences.append((f"{a.lineno}:{a.col_offset}", x, y, False, (ar.value, br.value)))
+                return scan(a.left, b.left)
         return all(scan(getattr(a, f), getattr(b, f)) for f in a._fields)
     try:
         if scan(before, after) and len(differences) == 1:
@@ -51,11 +60,13 @@ class Comparison:
         location = Path(maps_path)
         path = (location if location.is_dir() else location.parent) / "operands.json.gz"
         self.files = {}
+        self.scalars = {}
         self.unknown = set()
         if path.is_file():
             with gzip.open(path, "rt") as source:
                 data = json.load(source)
             self.files = data["files"]
+            self.scalars = data.get("scalars", {})
             by_id = {test["id"]: test["number"] for test in tests}
             self.by_index = [by_id.get(name) for name in data["ids"]]
             profiled = {self.by_index[i] for i in data["complete"]}
@@ -70,7 +81,26 @@ class Comparison:
         change = changed_operator(before, after)
         if change is None:
             return None
-        pos, old_op, new_op, none_rhs = change
+        pos, old_op, new_op, none_rhs, values = change
+        if values is not None:
+            groups = self.scalars.get(path, {}).get(pos)
+            if groups is None:
+                return None
+            first, second = values
+            retain = self.unknown.copy()
+            for key, indices in groups.items():
+                if key != "?":
+                    left = int(key[1:]) if key.startswith("i") else key[1:]
+                    try:
+                        if ORDER[old_op](left, first) == ORDER[new_op](left, second):
+                            continue
+                    except TypeError:
+                        pass
+                if -1 in indices:
+                    return None
+                retain.update(self.by_index[i] for i in indices)
+            retain.discard(None)
+            return retain
         if pos not in sites:
             return None
         retain = self.unknown.copy()

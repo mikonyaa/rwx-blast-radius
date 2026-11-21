@@ -64,7 +64,8 @@ def trace_in_fresh_python(source, output, command):
 
 
 class Collector:
-    def __init__(self, root, nodes, semantic=None):
+    def __init__(self, root, nodes, semantic=None, reverse=False):
+        self.reverse = reverse
         self.root = str(root) + os.sep
         self.nodes = nodes
         self.indices = {node: i for i, node in enumerate(nodes)}
@@ -126,6 +127,8 @@ class Collector:
 
     def pytest_collection_modifyitems(self, items):
         items[:] = [item for item in items if item.nodeid in self.indices]
+        if self.reverse:
+            items.reverse()
         class_masks = defaultdict(int)
         for item in items:
             if item.cls:
@@ -202,6 +205,7 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--only", nargs="+", help="restrict a development profile to pytest paths or nodes")
     parser.add_argument("--semantic", type=Path, help="add optional import-time config instrumentation")
+    parser.add_argument("--reverse", action="store_true", help="collect in reverse order to vary lazy cache ownership")
     args = parser.parse_args()
     root = args.source.resolve()
     nodes = [row["id"] for row in json.loads(args.catalog.read_text())["tests"]]
@@ -214,7 +218,7 @@ def main():
     if semantic_output:
         import semantic
         semantic.install()
-    collector = Collector(root, nodes, semantic)
+    collector = Collector(root, nodes, semantic, args.reverse)
     subprocess.run = collector.with_child_coverage(subprocess.run)
     tool = sys.monitoring.COVERAGE_ID
     sys.monitoring.use_tool_id(tool, "pinned coverage")

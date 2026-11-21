@@ -11,6 +11,7 @@ import time
 import unittest
 
 import query_probe
+from packing import pack
 
 
 def _overlay(base, target, paths):
@@ -50,11 +51,19 @@ class _Result(unittest.TestResult):
     def __init__(self, numbers):
         super().__init__()
         self.numbers = numbers
-        self.passed = []
+        self.passed = set()
+        self.subfailures = set()
         self.broken_fixture = False
 
     def addSuccess(self, test):
-        self.passed.append(self.numbers[test.id()])
+        if test.id() not in self.subfailures:
+            self.passed.add(self.numbers[test.id()])
+
+    def addSubTest(self, test, subtest, err):
+        if err is not None:
+            self.subfailures.add(test.id())
+            self.passed.discard(self.numbers[test.id()])
+        super().addSubTest(test, subtest, err)
 
     def addError(self, test, err):
         if test.id() not in self.numbers:
@@ -85,7 +94,7 @@ def _run_cases(records, notify):
             break
 
 
-def _probe_child(view, records, shards, notify, cpu_limit):
+def _child(view, fn, args, notify, cpu_limit, base):
     os.setsid()
     signal.setitimer(signal.ITIMER_PROF, cpu_limit)
     null = os.open(os.devnull, os.O_WRONLY)
@@ -95,12 +104,21 @@ def _probe_child(view, records, shards, notify, cpu_limit):
     sys.dont_write_bytecode = True
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.environ["SKIP_INTEGRATION"] = "0"
+    if base is not None:
+        base = Path(base).resolve()
+        sys.path[:] = [p for p in sys.path if not p or Path(p).resolve() != base]
     os.chdir(view)
     sys.path.insert(0, str(view))
-    os.environ["PYTHONPATH"] = os.pathsep.join([str(view), os.environ.get("PYTHONPATH", "")])
+    inherited = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    inherited = [p for p in inherited if p and (base is None or Path(p).resolve() != base)]
+    os.environ["PYTHONPATH"] = os.pathsep.join([str(view), *inherited])
     # Never silently run pristine modules imported earlier by the main selector.
     if "sqlglot" in sys.modules or "tests" in sys.modules:
         return
+    fn(*args, notify)
+
+
+def _run_selected(records, shards, notify):
     if shards:
         for number in query_probe.probe_rows(shards):
             os.write(notify, f"{number}\n".encode())
@@ -108,13 +126,13 @@ def _probe_child(view, records, shards, notify, cpu_limit):
         _run_cases(records, notify)
 
 
-def _confirmed_passes(view, records, shards, limit, cpu_limit):
+def isolated_numbers(view, fn, args, limit, cpu_limit, base=None):
     reader, writer = os.pipe()
     pid = os.fork()
     if not pid:
         os.close(reader)
         try:
-            _probe_child(view, records, shards, writer, cpu_limit)
+            _child(view, fn, args, writer, cpu_limit, base)
         finally:
             os._exit(0)
 
@@ -146,6 +164,11 @@ def _confirmed_passes(view, records, shards, limit, cpu_limit):
     return {int(number) for number in buffer.splitlines() if number.isdigit()}
 
 
+def _schedule_cost(numbers, seconds):
+    workers = pack(numbers, seconds)
+    return 2 * len(workers) + max((sum(seconds[n] for n in w) for w in workers), default=0)
+
+
 def refine(source_root, replacements, candidates, tests, budget=None):
     """Remove tests witnessed passing on this patch; uncertainty keeps the test.
 
@@ -167,15 +190,24 @@ def refine(source_root, replacements, candidates, tests, budget=None):
         specialized = {number for number, _, _ in shards}
         shards = [shard for shard in shards if shard[2]]
         records = [tests[number] for number in chosen if number not in specialized]
-        seconds = sum(record["seconds"] for record in records)
         if budget is None:
             # Initializing DuckDB and the fixture worker pool costs more than
             # these small selections usually save. Their TPC shards are handled
             # above and count separately from ordinary testcase probes.
-            costly_setup = any(r["file"] in ("tests/test_executor.py", "tests/test_optimizer.py")
-                               for r in records)
-            if costly_setup or seconds > 0.85 or len(records) > 120:
+            records = [r for r in records if r["file"] not in (
+                "tests/test_executor.py", "tests/test_optimizer.py")]
+            if sum(r["seconds"] for r in records) > 0.85 or len(records) > 120:
                 records = []
+
+            # Even confirming every planned test can leave the same bottleneck:
+            # another long test still needs its worker. Only spend CPU on partial
+            # probes when a successful result could pay for the work.
+            planned = {r["number"] for r in records} | {n for n, _, _ in shards}
+            if planned and chosen - planned:
+                durations = {n: tests[n]["seconds"] for n in chosen}
+                saving = _schedule_cost(chosen, durations) - _schedule_cost(chosen - planned, durations)
+                if saving <= 0.15 + sum(r["seconds"] for r in records):
+                    return chosen
             # The judge charges CPU. A batch competing for a time slice on an
             # emulator should not abandon a fast check merely because of wall time.
             cpu_limit = 2.6 if shards else 1.0
@@ -187,6 +219,6 @@ def refine(source_root, replacements, candidates, tests, budget=None):
         with tempfile.TemporaryDirectory(prefix="rwx-probe-") as folder:
             view = Path(folder)
             _overlay(Path(source_root).resolve(), view, replacements)
-            return chosen - _confirmed_passes(view, records, shards, budget, cpu_limit)
+            return chosen - isolated_numbers(view, _run_selected, (records, shards), budget, cpu_limit, source_root)
     except (OSError, TypeError, KeyError, ValueError):
         return chosen
