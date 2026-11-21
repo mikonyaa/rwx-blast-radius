@@ -19,6 +19,7 @@ from lazy_exports import LazyExports
 from load_envelope import LoadEnvelope, data_field_change
 from module_impact import ModuleImpact, same_imports
 from tokenizer_impact import TokenizerImpact
+from token_config import ByteConfig
 from trie_profile import TrieProfile
 from exception_profile import ExceptionProfile
 from type_guard import TypeGuardProfile
@@ -239,6 +240,7 @@ class Impact:
         self.load_envelope = LoadEnvelope(map_path.parent, self.tests)
         self.module_impact = ModuleImpact(map_path.parent, self.tests)
         self.tokenizer = TokenizerImpact(map_path.parent, self.tests)
+        self.byte_config = ByteConfig(map_path.parent, self.tests)
         self.trie_keys = TrieProfile(map_path.parent, self.tests)
         imports_path = map_path.with_name("imports.json.gz")
         self.import_trace = Trace(imports_path, self.tests) if imports_path.exists() else None
@@ -391,6 +393,12 @@ class Impact:
                 if not during_import:
                     observed.intersection_update(self.from_positions(path, syntax, blocks, new, new_positions))
                 return observed | reads | self.trace.incomplete
+        if single_file and path in self.byte_config.origins and any(
+            "BYTE_STRING_ESCAPES" in line for _, removed, added in blocks for line in (*removed,*added)
+        ):
+            config_users = self.byte_config.candidates(self.root, path, syntax.tree, new)
+            if config_users is not None:
+                return config_users | reads | self.trace.incomplete
         if path == "sqlglot/trie.py":
             trie_consumers = self.trie_keys.candidates(syntax.tree, new)
             if trie_consumers is not None:
