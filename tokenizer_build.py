@@ -18,6 +18,7 @@ class KeywordTrace(Collector):
         super().__init__(root, nodes)
         self.unknown = 0
         self.words = defaultdict(dict)
+        self.reserved = defaultdict(int)
         self.blocked = set()
         self.punctuation = set()
         self.uses = defaultdict(dict)
@@ -56,16 +57,41 @@ class KeywordTrace(Collector):
             path = (
                 Path(sys.modules[cls.__module__].__file__).relative_to(root).as_posix()
             )
-            if path != "sqlglot/jsonpath.py" and not path.startswith(
-                "sqlglot/dialects/"
-            ):
+            if path not in {
+                "sqlglot/tokens.py",
+                "sqlglot/jsonpath.py",
+            } and not path.startswith("sqlglot/dialects/"):
                 continue
             family = "jsonpath" if issubclass(cls, JSONPathTokenizer) else "sql"
             for name in ("KEYWORDS", "SINGLE_TOKENS"):
-                if name in vars(cls):
+                if name in vars(cls) and (
+                    path != "sqlglot/tokens.py" or cls is Tokenizer
+                ):
                     self.origins[path].append([cls.__qualname__, name, family])
 
         trace = self
+
+        class Reserved(set):
+            def __contains__(self, token):
+                if trace.mask:
+                    key = token.name if isinstance(token, TokenType) else "*"
+                    trace.reserved[key] |= trace.mask
+                return super().__contains__(token)
+
+            def __iter__(self):
+                trace.reserved["*"] |= trace.mask
+                return super().__iter__()
+
+        # Parser.RESERVED_TOKENS is built from Tokenizer.SINGLE_TOKENS.values();
+        # include inherited and eagerly copied effective tables across dialects.
+        parser_classes = {
+            p
+            for dialect in Dialect.classes.values()
+            for p in dialect.parser_class.__mro__
+        }
+        for parser in parser_classes:
+            if type(vars(parser).get("RESERVED_TOKENS")) is set:
+                parser.RESERVED_TOKENS = Reserved(parser.RESERVED_TOKENS)
 
         class Observed(dict):
             def __init__(self, original, family, name):
@@ -147,6 +173,7 @@ class KeywordTrace(Collector):
             "nodes": self.nodes,
             "unknown": encode(unknown),
             "enums": enums,
+            "reserved": {key: encode(mask) for key, mask in self.reserved.items()},
             "blocked": sorted(self.blocked),
             "punctuation": sorted(self.punctuation),
             "words": {

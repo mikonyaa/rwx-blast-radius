@@ -95,6 +95,7 @@ class TokenizerImpact:
         self.uses = data["uses"]
         self.enums = set(data["enums"])
         self.words = data.get("words", {})
+        self.reserved = data.get("reserved")
         self.blocked = set(data.get("blocked", ()))
         self.punctuation = set(data.get("punctuation", ()))
         self.origins = {
@@ -118,6 +119,18 @@ class TokenizerImpact:
             observed = self.uses.get(origins[key] + ":" + key[1])
             if observed is None:
                 continue
+            root_table = path == "sqlglot/tokens.py"
+            if root_table and key[1] == "SINGLE_TOKENS":
+                old_types = {token_name(node) for node in original.values}
+                new_types = {token_name(node) for node in new.values}
+                if None in old_types | new_types or self.reserved is None:
+                    continue
+                # SELECT is present independently and IDENTIFIER is always removed.
+                changed = (old_types ^ new_types) - {"SELECT", "IDENTIFIER"}
+                if changed:
+                    mask |= decode(self.reserved.get("*", ""))
+                for spelling in changed:
+                    mask |= decode(self.reserved.get(spelling, ""))
             if key[1] == "KEYWORDS" and origins[key] in self.words:
                 changes = one_entry_change(original, new, self.enums)
                 if changes and all(
@@ -127,6 +140,8 @@ class TokenizerImpact:
                 ):
                     for word in changes:
                         mask |= decode(self.words[origins[key]].get(word, ""))
+                        if root_table:
+                            mask |= decode(self.words.get("jsonpath", {}).get(word, ""))
                     # No other differences in this dictionary are accepted.
                     new.keys, new.values = original.keys, original.values
                     edited = True
@@ -150,6 +165,10 @@ class TokenizerImpact:
                 # this family. Copies retain the key and value, including inherited dialects.
                 signature = literal_key.value + ":" + previous
                 mask |= decode(observed.get(signature, ""))
+                if root_table:
+                    mask |= decode(
+                        self.uses.get("jsonpath:" + key[1], {}).get(signature, "")
+                    )
                 edited = True
                 new_value.attr = previous
         # Restoring only the recognized value substitutions must undo *all* changes.
