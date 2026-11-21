@@ -16,6 +16,7 @@ from types import CodeType
 from branch_impact import changed_branch
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
+from scanner_fields import ScannerFields
 from lazy_exports import LazyExports
 from load_envelope import LoadEnvelope, data_field_change
 from module_impact import ModuleImpact, same_imports
@@ -239,6 +240,7 @@ class Impact:
         self.callbacks = CallbackProfile(map_path.parent, self.tests)
         self.cold = ColdCoverage(map_path.parent, self.tests)
         self.global_reads = GlobalReads(map_path.parent, self.tests)
+        self.scanner_fields = ScannerFields(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
         self.trace = Trace(map_path, self.tests)
@@ -415,6 +417,10 @@ class Impact:
             config_users = self.byte_config.candidates(self.root, path, syntax.tree, new)
             if config_users is not None:
                 return config_users | reads | self.trace.incomplete
+        if single_file:
+            observed = self.scanner_fields.candidates(path, syntax, new, original_blocks)
+            if observed is not None:
+                return observed | reads | self.trace.incomplete
         if path == "sqlglot/trie.py":
             trie_consumers = self.trie_keys.candidates(syntax.tree, new)
             if trie_consumers is not None:
