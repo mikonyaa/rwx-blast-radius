@@ -351,6 +351,11 @@ class Impact:
         if path not in self.syntax:
             self.syntax[path] = Syntax(old, path)
         syntax = self.syntax[path]
+        if single_file:
+            # A copied callback can execute without a line event where its registry was built.
+            observed = self.callbacks.candidates(path, syntax, new, blocks)
+            if observed is not None:
+                return observed | reads | self.trace.incomplete
         if single_file and self.import_trace and len(blocks) == 1:
             line = blocks[0][0]
             scope, _ = syntax.contexts(line)
@@ -438,19 +443,12 @@ class Impact:
             if proven is not None:
                 return proven | reads | self.trace.incomplete
             if registry:
-                seen = self.callbacks.candidates(path, syntax, new, original_blocks) if single_file else None
-                return None if seen is None else seen | reads | self.trace.incomplete
+                return None
         anchor = changed_branch(syntax.tree, new, original_blocks)
         if anchor is not None:
             mask = self.trace.lines.get(path, {}).get(anchor, 0)
             return self.trace.test_numbers(mask) | reads | self.trace.incomplete
         candidates = self.from_positions(path, syntax, blocks, new, new_positions)
-        if single_file:
-            seen = self.callbacks.candidates(path, syntax, new, original_blocks)
-            if seen is not None:
-                # A deferred callback can be invoked from a copied dispatch table,
-                # independent of coverage at the line where the table was built.
-                candidates = seen
         if self.comparison and all(len(removed) == len(added) == 1
                                    and COMPARISON.search(removed[0])
                                    and COMPARISON.search(added[0])
