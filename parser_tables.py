@@ -41,7 +41,9 @@ def value_edit(old, new, profile):
             return None
         if ast.dump(a) == ast.dump(b):
             continue
-        if token(k1) is None or ref_name(a) not in profile["expr"] or ref_name(b) not in profile["expr"]:
+        expr_values = ref_name(a) in profile["expr"] and ref_name(b) in profile["expr"]
+        token_values = token(a) in profile["tokens"] and token(b) in profile["tokens"]
+        if token(k1) is None or not (expr_values or token_values):
             return None
         keys.add(token(k1))
     return keys
@@ -117,6 +119,7 @@ def build(root, catalog, output):
     data = defaultdict(dict)
     safe = defaultdict(set)
     eager = set()
+    eager_attributes = set()
     from semantic import import_expressions
     for folder in ("sqlglot", "tests"):
         for filename in (root/folder).rglob("*.py"):
@@ -126,9 +129,14 @@ def build(root, catalog, output):
             for node in import_expressions(tree):
                 if isinstance(node, ast.Attribute):
                     eager.add((getattr(node.value, "id", getattr(node.value, "attr", "")), node.attr))
+                    eager_attributes.add(node.attr)
+                elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                    eager_attributes.add(node.id)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.In, ast.NotIn)):
                     v = node.comparators[0]
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+                    v = node.func.value
                 elif isinstance(node, ast.Subscript):
                     v = node.value
                 elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_match_set" and node.args:
@@ -154,6 +162,9 @@ def build(root, catalog, output):
             return super().__contains__(key)
 
     class TokenMap(dict):
+        def get(self, key, default=None):
+            self.reads.key(key)
+            return super().get(key, default)
         def __contains__(self, key):
             self.reads.key(key)
             return super().__contains__(key)
@@ -172,8 +183,8 @@ def build(root, catalog, output):
             return self.table
 
     known = []
-    for cls in classes:
-        if cls is Parser or cls.__subclasses__() or not cls.__module__.startswith("sqlglot.parsers."):
+    for cls in classes | {Parser}:
+        if cls is not Parser and (cls.__subclasses__() or not cls.__module__.startswith("sqlglot.parsers.")):
             continue
         module = sys.modules[cls.__module__]
         path = Path(module.__file__).resolve().relative_to(root).as_posix()
@@ -187,6 +198,11 @@ def build(root, catalog, output):
             if type(obj) not in (set, dict) or not obj or not all(isinstance(k, TokenType) for k in obj):
                 continue
             if (cls.__name__, name) in eager:
+                continue
+            # For a shared base parser require no eager reference by any spelling:
+            # values copied into another table or compiled cache before these
+            # observers are installed would escape the measurement.
+            if cls is Parser and (name in eager_attributes or type(obj) is not dict):
                 continue
             if any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id == name
                    for other in classname.body if other is not stmt for n in import_expressions(other)):

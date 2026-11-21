@@ -398,7 +398,7 @@ class Impact:
                 return observers | reads | self.trace.incomplete
         registry = self.import_trace and self.touches_registry_build(path, syntax, blocks)
         parser_sites = (parser_tables.load(self.map_directory).get("sites", {}).get(path, {})
-                        if path.startswith("sqlglot/parsers/") else {})
+                        if (path == "sqlglot/parser.py" or path.startswith("sqlglot/parsers/")) else {})
         semantic_sites = self.semantic.get("bindings", {}).get(path, {}) if self.semantic else {}
         known_declaration = any(
             isinstance(node, (ast.Assign, ast.AnnAssign)) and
