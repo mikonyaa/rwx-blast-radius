@@ -452,6 +452,16 @@ class Impact:
                 return proven | reads | self.trace.incomplete
             if registry:
                 return None
+        # A class or module binding and its deferred lambda can share one line.
+        # Without a proven callback-body or declaration match, the edit can
+        # change an eager key/default and affect callers that never called the lambda.
+        for start, removed, _ in blocks:
+            for line in range(start, start + max(1, len(removed))):
+                chain = syntax.nodes.get(line, ())
+                if any(isinstance(node, ast.Lambda) for node in chain) and not any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in chain
+                ):
+                    return None
         anchor = changed_branch(syntax.tree, new, original_blocks)
         if anchor is not None:
             mask = self.trace.lines.get(path, {}).get(anchor, 0)
