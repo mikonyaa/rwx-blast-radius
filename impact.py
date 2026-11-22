@@ -501,6 +501,13 @@ class Impact:
             (str(node.lineno) in semantic_sites or str(node.lineno) in parser_sites)
             for start, _, _ in blocks for node in syntax.nodes.get(start, ())
         )
+        if single_file and registry:
+            # Whole-line import tracking includes short-circuited calls. Only a
+            # complete key profile can exclude the exact changed lookup.
+            measured = self.key_reads.candidates(path, syntax, new, original_blocks)
+            if measured is not None:
+                matching, uncertain = measured
+                return matching | uncertain | reads | self.trace.incomplete
         if registry or known_declaration:
             proven = self.registry_declarations(path, syntax, blocks, new, new_positions)
             if proven is not None:

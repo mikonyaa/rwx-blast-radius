@@ -16,7 +16,7 @@ def lookup(call, path):
         return False
     if call.func.attr == "meta_get":
         return True
-    return (call.func.attr == "get" and path.startswith("sqlglot/optimizer/")
+    return (call.func.attr == "get"
             and isinstance(call.func.value, ast.Attribute) and call.func.value.attr in ("args", "meta"))
 
 

@@ -127,7 +127,7 @@ def build(source, catalog, destination, reverse):
     builtins._rwx_key_read = capture
     concurrent.futures.ProcessPoolExecutor = LocalExecutor
     sys.addaudithook(audit)
-    status = pytest.main(["-q", "-p", "no:cacheprovider", "--tb=no", "-k", "not test_max_nodes", "tests"],
+    status = pytest.main(["-q", "-p", "no:cacheprovider", "--tb=no", "tests"],
                          plugins=[tracker])
     if status not in (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED) or not tracker.passed:
         raise RuntimeError(f"Baseline profiling failed ({status})")
