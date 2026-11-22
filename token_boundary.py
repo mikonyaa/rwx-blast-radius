@@ -56,7 +56,7 @@ def signature(core, sql, result):
 
 
 def mutation_span(old, updated):
-    """Single scalar, comparison or pure string method substitution in a scanner body."""
+    """A single substitution of an operator, scalar, enum member or string method."""
     import ast
 
     original = next(
@@ -69,6 +69,15 @@ def mutation_span(old, updated):
     )
     if original is None:
         return None
+    token_types = {
+        target.id
+        for enum in old.body
+        if isinstance(enum, ast.ClassDef) and enum.name == "TokenType"
+        for declaration in enum.body
+        if isinstance(declaration, ast.Assign)
+        for target in declaration.targets
+        if isinstance(target, ast.Name) and target.id.isupper()
+    }
     new = ast.parse(updated)
     mutations = []
     groups = (
@@ -116,7 +125,13 @@ def mutation_span(old, updated):
             and type(a) in (bool, str, int)
             or isinstance(owner, ast.Attribute)
             and field == "attr"
-            and any(a in g and b in g for g in groups)
+            and (
+                any(a in g and b in g for g in groups)
+                or isinstance(owner.value, ast.Name)
+                and owner.value.id == "TokenType"
+                and a in token_types
+                and b in token_types
+            )
         ):
             mutations.append(owner)
             return True
