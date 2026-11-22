@@ -32,6 +32,7 @@ from expression_impact import ExpressionImpact
 from value_profile import ValueProfile
 from exception_profile import ExceptionProfile
 from type_guard import TypeGuardProfile
+from class_subjects import ClassSubjects
 from cold_profile import ColdCoverage
 from global_reads import GlobalReads
 from typing_guards import unchanged_runtime_imports
@@ -259,6 +260,7 @@ class Impact:
         self.key_reads = KeyReads(map_path.parent, self.tests)
         self.function_users = FunctionUsers(map_path.parent, self.tests)
         self.enums = EnumGuards(map_path.parent, self.tests)
+        self.class_subjects = ClassSubjects(map_path.parent, self.tests)
         self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
@@ -560,6 +562,9 @@ class Impact:
             if enum_reads is not None:
                 matching, uncertain = enum_reads
                 candidates.intersection_update(matching | uncertain)
+            observed = self.class_subjects.candidates(path, syntax, new, original_blocks)
+            if observed is not None:
+                candidates.intersection_update(observed)
             measured = self.key_reads.candidates(path, syntax, new, original_blocks)
             if measured is not None:
                 observed, unknown = measured
