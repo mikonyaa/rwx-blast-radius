@@ -14,6 +14,7 @@ from textwrap import dedent
 from types import CodeType
 
 from branch_impact import changed_branch
+from key_reads import KeyReads
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
 from metadata_reads import MetadataReads
@@ -249,6 +250,7 @@ class Impact:
         self.global_reads = GlobalReads(map_path.parent, self.tests)
         self.scanner_fields = ScannerFields(map_path.parent, self.tests)
         self.values = ValueProfile(map_path.parent, self.tests)
+        self.key_reads = KeyReads(map_path.parent, self.tests)
         self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
@@ -529,6 +531,11 @@ class Impact:
                         candidates = comparable
                     else:
                         candidates.intersection_update(comparable)
+        if single_file and not during_import:
+            measured = self.key_reads.candidates(path, syntax, new, original_blocks)
+            if measured is not None:
+                observed, unknown = measured
+                candidates = observed | (unknown & candidates)
         if self.comparison and all(len(removed) == len(added) == 1
                                    and COMPARISON.search(removed[0])
                                    and COMPARISON.search(added[0])
