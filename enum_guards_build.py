@@ -13,10 +13,13 @@ from pathlib import Path
 import sys
 import pytest
 from coverage_build import Collector, LocalExecutor
-from enum_guards import guard, site
+from enum_guards import guard, match_argument, site
+from functools import lru_cache
+import inspect
+from types import MethodType, MemberDescriptorType
 
 
-def build(source, catalog, output, reverse=False):
+def build(source, catalog, output, reverse=False, matches=False):
     root, dest = source.resolve(), output.resolve()
     nodes = [row["id"] for row in json.loads(catalog.read_bytes())["tests"]]
     tracker = Collector(root, nodes, reverse=reverse)
@@ -26,7 +29,7 @@ def build(source, catalog, output, reverse=False):
 
     class Rewrite(ast.NodeTransformer):
         def visit_Compare(self, node):
-            names = guard(node)
+            names = not matches and guard(node)
             self.generic_visit(node)
             if names:
                 row = files[self.path].setdefault(site(node), {})
@@ -44,6 +47,22 @@ def build(source, catalog, output, reverse=False):
                         [],
                     ),
                     node.left,
+                )
+            return node
+
+        def visit_Call(self, node):
+            names = matches and match_argument(node)
+            self.generic_visit(node)
+            if names:
+                row = files[self.path].setdefault(site(node), {})
+                number = len(sites)
+                sites.append(row)
+                fn = ast.Name("_rwx_observe_match", ast.Load())
+                return ast.copy_location(
+                    ast.Call(
+                        fn, [ast.Constant(number), node.func, *node.args], node.keywords
+                    ),
+                    node,
                 )
             return node
 
@@ -97,6 +116,66 @@ def build(source, catalog, output, reverse=False):
         row[key] = row.get(key, 0) | mask
         return value
 
+    parser_path = str(root / "sqlglot/parser.py")
+    source_tree = ast.parse(Path(parser_path).read_bytes())
+    target = next(
+        m
+        for c in source_tree.body
+        if isinstance(c, ast.ClassDef) and c.name == "Parser"
+        for m in c.body
+        if isinstance(m, ast.FunctionDef) and m.name == "_match"
+    )
+    expected = ast.parse("""if self._curr.token_type == token_type:
+    if advance:
+        self._advance()
+    self._add_comments(expression)
+    return True
+return False""")
+    if [ast.dump(v) for v in target.body] != [ast.dump(v) for v in expected.body]:
+        raise ValueError("Unrecognized parser matcher body")
+    token_cls = None
+
+    @lru_cache(maxsize=None)
+    def cursor(cls):
+        item = inspect.getattr_static(cls, "_curr", None)
+        if (
+            isinstance(item, MemberDescriptorType)
+            and cls.__getattribute__ is object.__getattribute__
+        ):
+            return item
+        return None
+
+    def observe_match(ix, function, token_type, *rest, **kw):
+        nonlocal enum, token_cls
+        if enum is None:
+            mod = sys.modules.get("sqlglot.tokenizer_core")
+            if mod:
+                enum, token_cls = vars(mod).get("TokenType"), vars(mod).get("Token")
+        row = sites[ix]
+        key = "?"
+        if (
+            enum
+            and token_cls
+            and type(function) is MethodType
+            and type(token_type) is enum
+            and function.__func__.__code__.co_filename == parser_path
+            and function.__func__.__code__.co_firstlineno == target.lineno
+            and function.__func__.__qualname__ == "Parser._match"
+        ):
+            instance = function.__self__
+            slot = cursor(type(instance))
+            if slot:
+                try:
+                    token = slot.__get__(instance, type(instance))
+                except AttributeError:
+                    pass
+                else:
+                    if type(token) is token_cls and type(token.token_type) is enum:
+                        key = token.token_type.name
+        mask = tracker.mask if tracker.mask and not depth else -1
+        row[key] = row.get(key, 0) | mask
+        return function(token_type, *rest, **kw)
+
     def audit(event, args):
         if tracker.mask and event in {
             "os.fork",
@@ -114,6 +193,7 @@ def build(source, catalog, output, reverse=False):
     sys.path.insert(0, str(root))
     sys.meta_path.insert(0, Finder())
     builtins._rwx_observe_token_guard = observe
+    builtins._rwx_observe_match = observe_match
     concurrent.futures.ProcessPoolExecutor = LocalExecutor
     sys.addaudithook(audit)
     status = pytest.main(
@@ -171,4 +251,8 @@ if __name__ == "__main__":
     if sys.argv[1:2] == ["--merge"]:
         merge(*(Path(v) for v in sys.argv[2:5]))
     else:
-        build(*(Path(v) for v in sys.argv[1:4]), reverse="--reverse" in sys.argv[4:])
+        build(
+            *(Path(v) for v in sys.argv[1:4]),
+            reverse="--reverse" in sys.argv[4:],
+            matches="--matcher" in sys.argv[4:],
+        )

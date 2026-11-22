@@ -16,7 +16,7 @@ from types import CodeType
 from branch_impact import changed_branch
 from key_reads import KeyReads
 from function_users import FunctionUsers
-from enum_guards import EnumGuards
+from enum_guards import EnumGuards, MatchCalls
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
 from metadata_reads import MetadataReads
@@ -259,8 +259,8 @@ class Impact:
         self.values = ValueProfile(map_path.parent, self.tests)
         self.key_reads = KeyReads(map_path.parent, self.tests)
         self.function_users = FunctionUsers(map_path.parent, self.tests)
-        self.enums = EnumGuards(map_path.parent, self.tests)
         self.class_subjects = ClassSubjects(map_path.parent, self.tests)
+        self.token_guards = (EnumGuards(map_path.parent, self.tests), MatchCalls(map_path.parent, self.tests))
         self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
@@ -511,12 +511,11 @@ class Impact:
             for start, _, _ in blocks for node in syntax.nodes.get(start, ())
         )
         if single_file and registry:
-            key_lookup = self.key_reads.candidates(path, syntax, new, original_blocks)
-            enum_guard = self.enums.candidates(path, syntax, new, original_blocks)
-            projected = enum_guard if enum_guard is not None else key_lookup
-            if projected is not None:
-                matching, uncertain = projected
-                return matching | uncertain | reads | self.trace.incomplete
+            for profile in (*self.token_guards, self.key_reads):
+                projected = profile.candidates(path, syntax, new, original_blocks)
+                if projected is not None:
+                    matching, uncertain = projected
+                    return matching | uncertain | reads | self.trace.incomplete
         if registry or known_declaration:
             proven = self.registry_declarations(path, syntax, blocks, new, new_positions)
             if proven is not None:
@@ -558,10 +557,11 @@ class Impact:
                     else:
                         candidates.intersection_update(comparable)
         if single_file and not during_import:
-            enum_reads = self.enums.candidates(path, syntax, new, original_blocks)
-            if enum_reads is not None:
-                matching, uncertain = enum_reads
-                candidates.intersection_update(matching | uncertain)
+            for profile in self.token_guards:
+                observed = profile.candidates(path, syntax, new, original_blocks)
+                if observed is not None:
+                    matching, uncertain = observed
+                    candidates.intersection_update(matching | uncertain)
             observed = self.class_subjects.candidates(path, syntax, new, original_blocks)
             if observed is not None:
                 candidates.intersection_update(observed)
