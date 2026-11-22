@@ -16,6 +16,7 @@ from types import CodeType
 from branch_impact import changed_branch
 from key_reads import KeyReads
 from function_users import FunctionUsers
+from enum_guards import EnumGuards
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
 from metadata_reads import MetadataReads
@@ -257,6 +258,7 @@ class Impact:
         self.values = ValueProfile(map_path.parent, self.tests)
         self.key_reads = KeyReads(map_path.parent, self.tests)
         self.function_users = FunctionUsers(map_path.parent, self.tests)
+        self.enums = EnumGuards(map_path.parent, self.tests)
         self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
@@ -507,11 +509,11 @@ class Impact:
             for start, _, _ in blocks for node in syntax.nodes.get(start, ())
         )
         if single_file and registry:
-            # Whole-line import tracking includes short-circuited calls. Only a
-            # complete key profile can exclude the exact changed lookup.
-            measured = self.key_reads.candidates(path, syntax, new, original_blocks)
-            if measured is not None:
-                matching, uncertain = measured
+            key_lookup = self.key_reads.candidates(path, syntax, new, original_blocks)
+            enum_guard = self.enums.candidates(path, syntax, new, original_blocks)
+            projected = enum_guard if enum_guard is not None else key_lookup
+            if projected is not None:
+                matching, uncertain = projected
                 return matching | uncertain | reads | self.trace.incomplete
         if registry or known_declaration:
             proven = self.registry_declarations(path, syntax, blocks, new, new_positions)
@@ -554,6 +556,10 @@ class Impact:
                     else:
                         candidates.intersection_update(comparable)
         if single_file and not during_import:
+            enum_reads = self.enums.candidates(path, syntax, new, original_blocks)
+            if enum_reads is not None:
+                matching, uncertain = enum_reads
+                candidates.intersection_update(matching | uncertain)
             measured = self.key_reads.candidates(path, syntax, new, original_blocks)
             if measured is not None:
                 observed, unknown = measured
