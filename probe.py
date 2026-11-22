@@ -161,10 +161,13 @@ def isolated_numbers(view, fn, args, limit, cpu_limit, base=None):
                 break
             buffer.extend(block)
     finally:
-        if not finished:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
+        # EOF also follows a hard CPU timeout in the group leader. A spawned
+        # pool process need not inherit the pipe and may still be running.
+        # Terminate the group before reaping the leader so its PID cannot be reused.
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            if not finished:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
