@@ -36,6 +36,7 @@ from typing_guards import unchanged_runtime_imports
 import fixture_impact
 import fixture_stream
 import semantic
+import local_flag_reads
 import parser_tables
 
 COMPARISON = re.compile(r"\bis\b|==|!=|<=|>=|<|>")
@@ -554,6 +555,14 @@ class Impact:
                 candidates.intersection_update(matched)
         return candidates | reads | self.trace.incomplete
 
+    def declaration_nodes(self, path, stmt, fresh):
+        nodes = semantic.selected_nodes(self.semantic, path, stmt, fresh)
+        if nodes is not None:
+            consumed = local_flag_reads.candidates(self.map_directory, path, stmt, fresh)
+            if consumed is not None:
+                nodes.intersection_update(consumed)
+        return nodes
+
     def registry_declarations(self, path, syntax, blocks, new, new_positions):
         """Allow a precomputed registry to narrow only when all edited entries were traced."""
         if not self.semantic:
@@ -575,7 +584,7 @@ class Impact:
             last = first + len(added) - 1
             other = next((node for node in reversed(updated.nodes.get(first, ()))
                           if isinstance(node, type(stmt)) and node.end_lineno >= last), None)
-            nodes = semantic.selected_nodes(self.semantic, path, stmt, other)
+            nodes = self.declaration_nodes(path, stmt, other)
             if nodes is None:
                 nodes = parser_tables.selected(self.map_directory, path, stmt, other, self.by_id)
             if nodes is None:
@@ -662,7 +671,7 @@ class Impact:
                         new_syntax = Syntax(new, path)
                     new_line = new_positions[start] + min(line - start, len(added) - 1)
                     _, updated = new_syntax.contexts(new_line)
-                    nodes = semantic.selected_nodes(self.semantic, path, stmt, updated)
+                    nodes = self.declaration_nodes(path, stmt, updated)
                     if nodes is not None:
                         explicit.update(self.by_id[node] for node in nodes if node in self.by_id)
                         continue
