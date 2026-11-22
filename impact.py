@@ -15,6 +15,7 @@ from types import CodeType
 
 from branch_impact import changed_branch
 from key_reads import KeyReads
+from function_users import FunctionUsers
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
 from metadata_reads import MetadataReads
@@ -255,6 +256,7 @@ class Impact:
         self.scanner_fields = ScannerFields(map_path.parent, self.tests)
         self.values = ValueProfile(map_path.parent, self.tests)
         self.key_reads = KeyReads(map_path.parent, self.tests)
+        self.function_users = FunctionUsers(map_path.parent, self.tests)
         self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
@@ -336,7 +338,10 @@ class Impact:
                     # A cached value may have changed before any observed test ran.
                     # A partial query replay cannot validate those initialization effects.
                     uncertain_initialization = True
-                    file_tests = self.dependents(before)
+                    if before not in self.syntax:
+                        self.syntax[before] = Syntax(source, before)
+                    callers = self.function_users.candidates(self, before, new, blocks) if independent else None
+                    file_tests = self.dependents(before) if callers is None else callers
                 if len(edits) == 1:
                     file_tests = self.cold.filter(self, before, source, new, blocks, file_tests)
                 selected.update(file_tests)
