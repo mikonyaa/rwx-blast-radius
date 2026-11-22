@@ -24,6 +24,7 @@ from tokenizer_impact import TokenizerImpact
 from token_config import ByteConfig
 from trie_profile import TrieProfile
 from expression_impact import ExpressionImpact
+from value_profile import ValueProfile
 from exception_profile import ExceptionProfile
 from type_guard import TypeGuardProfile
 from cold_profile import ColdCoverage
@@ -244,6 +245,7 @@ class Impact:
         self.cold = ColdCoverage(map_path.parent, self.tests)
         self.global_reads = GlobalReads(map_path.parent, self.tests)
         self.scanner_fields = ScannerFields(map_path.parent, self.tests)
+        self.values = ValueProfile(map_path.parent, self.tests)
         self.expression_profile = ExpressionImpact(map_path.parent, self.tests)
         self.exception_profile = ExceptionProfile(map_path.parent, self.tests)
         self.type_guards = TypeGuardProfile(map_path.parent, self.tests)
@@ -509,6 +511,15 @@ class Impact:
                 candidates = expression_hits
             else:
                 candidates.intersection_update(expression_hits)
+        if not during_import and len(original_blocks) == 1:
+            changed_line, removed, added = original_blocks[0]
+            if len(removed) == len(added) == 1:
+                comparable = self.values.match(path, syntax.tree, new, changed_line)
+                if comparable is not None:
+                    if lambda_scope and expression_hits is None:
+                        candidates = comparable
+                    else:
+                        candidates.intersection_update(comparable)
         if self.comparison and all(len(removed) == len(added) == 1
                                    and COMPARISON.search(removed[0])
                                    and COMPARISON.search(added[0])
