@@ -1,6 +1,5 @@
 """Run short candidate suites against an isolated copy-on-write source tree."""
 
-import itertools
 import os
 from pathlib import Path
 import select
@@ -54,6 +53,13 @@ class _Result(unittest.TestResult):
         self.passed = set()
         self.subfailures = set()
         self.broken_fixture = False
+        self.failfast = True
+
+    def stopTest(self, test):
+        super().stopTest(test)
+        # End an assertion-heavy failing case immediately, but still check independent cases.
+        if not self.broken_fixture:
+            self.shouldStop = False
 
     def addSuccess(self, test):
         if test.id() not in self.subfailures:
@@ -74,23 +80,27 @@ class _Result(unittest.TestResult):
 def _run_cases(records, notify):
     # Grouping honors unittest's class/module setup and teardown. Report a pass
     # only once the entire module has completed, including its teardown.
-    records = sorted(records, key=lambda record: (record["file"], record["number"]))
-    for _, group in itertools.groupby(records, key=lambda record: record["file"]):
+    grouped = {}
+    for record in records:
+        grouped.setdefault(record["file"], []).append(record)
+    # Complete one module including its teardown before moving to the next.
+    # Spend a limited child budget first where a whole-module pass frees most load.
+    for _, group in sorted(grouped.items(), key=lambda pair: (-sum(r["seconds"] for r in pair[1]), pair[0])):
         cases = []
         numbers = {}
-        for record in group:
+        for record in sorted(group, key=lambda row: row["number"]):
             filename, cls, method = record["id"].split("::")
             name = ".".join([filename[:-3].replace("/", "."), cls, method])
             cases.append(name)
             numbers[name] = record["number"]
         suite = unittest.defaultTestLoader.loadTestsFromNames(cases)
         result = _Result(numbers)
-        result.failfast = True
         suite.run(result)
         if not result.broken_fixture:
             for number in result.passed:
                 os.write(notify, f"{number}\n".encode())
-        if not result.wasSuccessful():
+        if result.broken_fixture:
+            # Another module may otherwise inherit incompletely restored process state.
             break
 
 
