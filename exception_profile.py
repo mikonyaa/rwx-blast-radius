@@ -23,6 +23,15 @@ def exception_names(expr):
     return names
 
 
+def simple_handler(expr):
+    """Exception class lookup with no embedded bindings or expressions."""
+    if isinstance(expr, ast.Tuple):
+        return bool(expr.elts) and all(simple_handler(item) for item in expr.elts)
+    while isinstance(expr, ast.Attribute):
+        expr = expr.value
+    return isinstance(expr, ast.Name)
+
+
 def shadowed(tree, names):
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and node.id in names:
@@ -75,10 +84,12 @@ class ExceptionProfile(GuardProfile):
         if before is None or after is None:
             return None
         old, new = exception_names(before.type), exception_names(after.type)
-        if old is None or new is None or shadowed(old_tree, old | new):
+        if not (simple_handler(before.type) and simple_handler(after.type)):
             return None
-        old = {getattr(builtins, name).__name__ for name in old}
-        new = {getattr(builtins, name).__name__ for name in new}
+        compare_ancestry = old is not None and new is not None and not shadowed(old_tree, old | new)
+        if compare_ancestry:
+            old = {getattr(builtins, name).__name__ for name in old}
+            new = {getattr(builtins, name).__name__ for name in new}
         # Exclude edits to the body, variable binding, or other expressions on
         # the same line. Only the new, disposable tree is changed here.
         after.type = before.type
@@ -87,7 +98,9 @@ class ExceptionProfile(GuardProfile):
         selected = self.unknown.copy()
         for ancestry, indices in states.items():
             names = set(ancestry.split(","))
-            if bool(old & names) != bool(new & names):
+            # A handler lookup happens only when Python dispatches an exception.
+            # For non-builtin classes keep every test that reached the lookup.
+            if not compare_ancestry or bool(old & names) != bool(new & names):
                 if during_import or -1 in indices:
                     return None
                 selected.update(self.numbers[i] for i in indices)
@@ -134,7 +147,7 @@ def build(root, catalog, destination, type_guards=False):
             # would give the wrong answer. Ignore those handlers entirely.
             ordinary = [h for n in ast.walk(tree) if isinstance(n, ast.Try) for h in n.handlers]
             for h in ordinary:
-                if exception_names(h.type) is None:
+                if not simple_handler(h.type):
                     continue
                 entry = files[name].setdefault(str(h.lineno), {})
                 call = ast.Call(ast.Name("_rwx_observe_exception", ast.Load()), [ast.Constant(len(sites)), h.type], [])
