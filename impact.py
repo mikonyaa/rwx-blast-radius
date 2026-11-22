@@ -16,6 +16,7 @@ from types import CodeType
 from branch_impact import changed_branch
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
+from metadata_reads import MetadataReads
 from scanner_fields import ScannerFields
 from lazy_exports import LazyExports
 from load_envelope import LoadEnvelope, data_field_change
@@ -242,6 +243,7 @@ class Impact:
         self.map_directory = map_path.parent
         self.default_profile = DefaultProfile(map_path.parent, self.tests)
         self.callbacks = CallbackProfile(map_path.parent, self.tests)
+        self.type_metadata = MetadataReads(map_path.parent, self.tests)
         self.cold = ColdCoverage(map_path.parent, self.tests)
         self.global_reads = GlobalReads(map_path.parent, self.tests)
         self.scanner_fields = ScannerFields(map_path.parent, self.tests)
@@ -455,6 +457,10 @@ class Impact:
                 return config_users | reads | self.trace.incomplete
         if single_file:
             observed = self.scanner_fields.candidates(path, syntax, new, original_blocks)
+            if observed is not None:
+                return observed | reads | self.trace.incomplete
+        if single_file:
+            observed = self.type_metadata.candidates(path, syntax, new, original_blocks)
             if observed is not None:
                 return observed | reads | self.trace.incomplete
         if path == "sqlglot/trie.py":
