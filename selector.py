@@ -49,9 +49,11 @@ def main():
                 chosen = analysis.tests
                 if not args.without_probes and time_left > 6:
                     chosen = refine_patch(impact, patch, analysis, chosen, by_number)
-                    chosen = refine(args.source, analysis.paths, chosen, by_number)
+                    effective = {p: text for p, text in analysis.paths.items() if p not in analysis.cosmetic}
+                    chosen = refine(args.source, analysis.paths, chosen, by_number, effective=effective)
                     if start + limit - time.monotonic() > 10:
-                        chosen = optimizer_replay.refine(args.source, analysis.paths, chosen, by_number)
+                        chosen = optimizer_replay.refine(args.source, effective, chosen, by_number)
+                    chosen.update(analysis.source_readers)
                 if time_left > 9:
                     chosen = guard.augment(patch, analysis, chosen)
             except (OSError, ValueError, SyntaxError, KeyError, IndexError, RecursionError) as exc:

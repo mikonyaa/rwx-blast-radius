@@ -47,6 +47,8 @@ class Change:
 class Analysis:
     paths: dict[str, str | None]
     tests: set[int]
+    cosmetic: frozenset[str] = frozenset()
+    source_readers: set[int] = field(default_factory=set)
 
 
 def patch_path(value):
@@ -291,6 +293,9 @@ class Impact:
         selected = set()
         paths = {}
         uncertain_initialization = False
+        staged = []
+        cosmetic = set()
+        protected = set()
         try:
             edits = list(changes(patch))
             for change in edits:
@@ -303,10 +308,19 @@ class Impact:
                     paths[before] = None
                 if after:
                     paths[after] = new
+                staged.append((before, after, source, new, blocks))
+                if (len(edits) > 1 and before == after and before.endswith(".py")
+                        and self.comment_only(before, source, new, blocks)):
+                    cosmetic.add(before)
+                    protected.update(self.trace.test_numbers(self.trace.reads.get(before, 0)))
+                    if self.import_trace:
+                        protected.update(self.import_trace.test_numbers(self.import_trace.reads.get(before, 0)))
+            independent = len(edits) - len(cosmetic) == 1
+            for before, after, source, new, blocks in staged:
                 if before != after:
                     selected.update(self.all)
                     continue
-                file_tests = self.for_file(before, source, new, blocks, single_file=len(edits) == 1)
+                file_tests = self.for_file(before, source, new, blocks, single_file=independent)
                 if file_tests is None:
                     # A cached value may have changed before any observed test ran.
                     # A partial query replay cannot validate those initialization effects.
@@ -318,7 +332,25 @@ class Impact:
         except (ValueError, OSError, RecursionError):
             # An unrecognized form (e.g. binary/rename-only diff) must remain conservative.
             return Analysis({}, self.all.copy())
-        return Analysis({} if uncertain_initialization else paths, selected)
+        if cosmetic:
+            protected.update(self.trace.incomplete)
+        return Analysis({} if uncertain_initialization else paths, selected | protected, frozenset(cosmetic), protected)
+
+    def comment_only(self, path, old, new, blocks):
+        # A line beginning with # inside a literal still changes the function's
+        # constants. Require actual compiler equivalence in addition to the diff shape.
+        for start, removed, added in blocks:
+            for line in (*removed, *added):
+                if line.strip() and not line.lstrip().startswith("#"):
+                    return False
+                if start <= 2 and re.search(r"coding[:=]", line):
+                    return False
+        try:
+            if path not in self.compiled:
+                self.compiled[path] = normalized_code(compile(old.encode(), path, "exec", dont_inherit=True))
+            return self.compiled[path] == normalized_code(compile(new.encode(), path, "exec", dont_inherit=True))
+        except (ValueError, SyntaxError):
+            return False
 
     def candidates(self, patch):
         return self.analyze(patch).tests

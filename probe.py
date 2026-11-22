@@ -169,7 +169,7 @@ def _schedule_cost(numbers, seconds):
     return 2 * len(workers) + max((sum(seconds[n] for n in w) for w in workers), default=0)
 
 
-def refine(source_root, replacements, candidates, tests, budget=None):
+def refine(source_root, replacements, candidates, tests, budget=None, effective=None):
     """Remove tests witnessed passing on this patch; uncertainty keeps the test.
 
     tests is a sequence of the official numbered records (or a number→record
@@ -182,11 +182,12 @@ def refine(source_root, replacements, candidates, tests, budget=None):
     if any(content is None for content in replacements.values()):
         return chosen
     try:
-        python_only = all(path.endswith(".py") for path in replacements)
+        planned_paths = replacements if effective is None else effective
+        python_only = all(path.endswith(".py") for path in planned_paths)
         if python_only:
-            shards = query_probe.plan(source_root, replacements, chosen, tests)
-        elif len(replacements) == 1 and next(iter(replacements)).endswith(".sql"):
-            shards = query_probe.fixture_plan(source_root, replacements, chosen, tests)
+            shards = query_probe.plan(source_root, planned_paths, chosen, tests)
+        elif len(planned_paths) == 1 and next(iter(planned_paths)).endswith(".sql"):
+            shards = query_probe.fixture_plan(source_root, planned_paths, chosen, tests)
             if not shards:
                 return chosen
         else:

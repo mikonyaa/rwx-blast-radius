@@ -278,7 +278,7 @@ def refine_patch(impact, patch, analysis, candidates, catalog):
         return candidates
     from impact import apply, changes
 
-    edits = changes(patch)
+    edits = [edit for edit in changes(patch) if edit.before not in analysis.cosmetic]
     if len(edits) != 1 or edits[0].before != target or edits[0].after != target:
         return candidates
     source = impact.baseline(target)
