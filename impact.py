@@ -30,6 +30,7 @@ from exception_profile import ExceptionProfile
 from type_guard import TypeGuardProfile
 from cold_profile import ColdCoverage
 from global_reads import GlobalReads
+from typing_guards import unchanged_runtime_imports
 import fixture_impact
 import semantic
 import parser_tables
@@ -407,6 +408,8 @@ class Impact:
             consumers = self.global_reads.match(path, syntax.tree, new, blocks)
             if consumers is not None:
                 return consumers | reads | self.trace.incomplete
+        if single_file and unchanged_runtime_imports(syntax.tree, new, blocks, self.trace.lines.get(path, {})):
+            return reads | self.trace.incomplete
         original_blocks = blocks
         neutral = [b for b in blocks if all(not line.strip() or line.lstrip().startswith("#")
                                              for line in [*b[1], *b[2]])]
