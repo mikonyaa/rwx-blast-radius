@@ -18,6 +18,7 @@ from key_reads import KeyReads
 from default_profile import DefaultProfile
 from callback_profile import CallbackProfile
 from metadata_reads import MetadataReads
+from date_fields import DateFields
 from scanner_fields import ScannerFields
 from lazy_exports import LazyExports
 from load_envelope import LoadEnvelope, data_field_change
@@ -33,6 +34,7 @@ from cold_profile import ColdCoverage
 from global_reads import GlobalReads
 from typing_guards import unchanged_runtime_imports
 import fixture_impact
+import fixture_stream
 import semantic
 import parser_tables
 
@@ -246,6 +248,7 @@ class Impact:
         self.default_profile = DefaultProfile(map_path.parent, self.tests)
         self.callbacks = CallbackProfile(map_path.parent, self.tests)
         self.type_metadata = MetadataReads(map_path.parent, self.tests)
+        self.date_fields = DateFields(map_path.parent, self.tests)
         self.cold = ColdCoverage(map_path.parent, self.tests)
         self.global_reads = GlobalReads(map_path.parent, self.tests)
         self.scanner_fields = ScannerFields(map_path.parent, self.tests)
@@ -369,6 +372,9 @@ class Impact:
         if not path.endswith(".py"):
             if path in self.trace.reads:
                 reads = fixture_impact.narrow(self.root, self.map_directory, path, old, new, reads, self.by_id, single_file)
+                if single_file and reads and path.endswith(".sql"):
+                    reads.difference_update(fixture_stream.stable_users(
+                        self.root, self.map_directory, path, old, new, self.by_id))
                 return reads | self.trace.incomplete
             return self.all.copy() if path.startswith(("sqlglot/", "tests/")) else reads
 
@@ -465,6 +471,9 @@ class Impact:
             if observed is not None:
                 return observed | reads | self.trace.incomplete
         if single_file:
+            dates = self.date_fields.candidates(path, syntax, new, original_blocks)
+            if dates is not None:
+                return dates | reads | self.trace.incomplete
             observed = self.type_metadata.candidates(path, syntax, new, original_blocks)
             if observed is not None:
                 return observed | reads | self.trace.incomplete
