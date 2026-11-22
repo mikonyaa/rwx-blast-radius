@@ -52,7 +52,17 @@ def value_edit(old, new, profile):
 @lru_cache(maxsize=2)
 def load(directory):
     path = Path(directory) / "parser_tables.json.gz"
-    return json.loads(gzip.decompress(path.read_bytes())) if path.exists() else {}
+    if not path.exists():
+        return {}
+    data = json.loads(gzip.decompress(path.read_bytes()))
+    strings = Path(directory) / "parser_strings.json.gz"
+    if strings.is_file():
+        supplement = json.loads(gzip.decompress(strings.read_bytes()))
+        if data["nodes"] == supplement["nodes"]:
+            for file, rows in supplement["sites"].items():
+                data["sites"].setdefault(file, {}).update(rows)
+            data["string_unknown"] = supplement["unknown"]
+    return data
 
 
 def selected(directory, path, old, new, catalog):
@@ -62,11 +72,28 @@ def selected(directory, path, old, new, catalog):
     site = profile.get("sites", {}).get(path, {}).get(str(old.lineno))
     if site is None:
         return None
-    if isinstance(old.value, ast.Dict):
+    string_keys = site.get("strings", False)
+    if string_keys:
+        if not isinstance(old.value, ast.Dict) or not isinstance(new.value, ast.Dict):
+            return None
+        if len(old.value.keys) != len(new.value.keys):
+            return None
+        if [ast.dump(n) for n in old.value.values] != [ast.dump(n) for n in new.value.values]:
+            return None
+        keys = set()
+        for before, after in zip(old.value.keys, new.value.keys):
+            if before is None or after is None:
+                if before is not after:
+                    return None
+            elif ast.dump(before) != ast.dump(after):
+                if not all(isinstance(n, ast.Constant) and type(n.value) is str for n in (before, after)):
+                    return None
+                keys.update((before.value, after.value))
+    elif isinstance(old.value, ast.Dict):
         keys = value_edit(old.value, new.value, profile)
     else:
         keys = membership_edit(old.value, new.value)
-    if not keys or not keys.issubset(profile["tokens"]):
+    if not keys or (not string_keys and not keys.issubset(profile["tokens"])):
         return None
     # Every unchanged key retains its value. A set changing emptiness can affect
     # truthiness checks independently of the membership queries we traced.
@@ -76,7 +103,7 @@ def selected(directory, path, old, new, catalog):
     for key in keys:
         mask |= int(site["keys"].get(key, "0"), 16)
     names = profile["nodes"]
-    ids = set(profile["unknown"])
+    ids = set(profile["string_unknown"] if string_keys else profile["unknown"])
     while mask:
         bit = mask & -mask
         ids.add(names[bit.bit_length() - 1])
@@ -89,7 +116,7 @@ def profile_names(directory):
     return set(load(directory)["nodes"])
 
 
-def build(root, catalog, output):
+def build(root, catalog, output, strings=False):
     import os
     import sys
     import subprocess
@@ -151,7 +178,9 @@ def build(root, catalog, output):
             self.whole = 0
             self.keys = defaultdict(int)
         def key(self, k):
-            if k in token_names:
+            if strings and type(k) is str:
+                self.keys[k] |= collector.mask
+            elif not strings and k in token_names:
                 self.keys[token_names[k]] |= collector.mask
             else:
                 self.whole |= collector.mask
@@ -195,7 +224,10 @@ def build(root, catalog, output):
         for stmt in classname.body:
             name = name_of(stmt)
             obj = vars(cls).get(name)
-            if type(obj) not in (set, dict) or not obj or not all(isinstance(k, TokenType) for k in obj):
+            if strings:
+                if type(obj) is not dict or not obj or not all(type(k) is str for k in obj):
+                    continue
+            elif type(obj) not in (set, dict) or not obj or not all(isinstance(k, TokenType) for k in obj):
                 continue
             if (cls.__name__, name) in eager:
                 continue
@@ -220,7 +252,7 @@ def build(root, catalog, output):
     if result not in (0, 1) or not collector.passed:
         raise RuntimeError(result)
     for path, line, size, reads in known:
-        data[path][line] = {"size": size, "any": format(reads.whole, "x"),
+        data[path][line] = {"strings": strings, "size": size, "any": format(reads.whole, "x"),
                             "keys": {k: format(v,"x") for k,v in reads.keys.items()}}
     unknown = (set(range(len(nodes))) - collector.passed) | collector.failed
     unknown.update(i for i in range(len(nodes)) if active_child & (1 << i))
@@ -233,4 +265,4 @@ def build(root, catalog, output):
 
 if __name__ == "__main__":
     import sys
-    build(*(Path(p).resolve() for p in sys.argv[1:]))
+    build(*(Path(p).resolve() for p in sys.argv[1:4]), strings="--string-keys" in sys.argv[4:])
