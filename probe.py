@@ -1,5 +1,8 @@
 """Run short candidate suites against an isolated copy-on-write source tree."""
 
+from functools import lru_cache
+import gzip
+import json
 import os
 from pathlib import Path
 import select
@@ -182,6 +185,55 @@ def _schedule_cost(numbers, seconds):
     return 2 * len(workers) + max((sum(seconds[n] for n in w) for w in workers), default=0)
 
 
+@lru_cache(maxsize=1)
+def _timings():
+    path = Path(__file__).with_name("maps") / "probe_timings.json.gz"
+    if not path.is_file():
+        return {}
+    with gzip.open(path, "rt") as handle:
+        return json.load(handle)
+
+
+def _expand_plan(records, baseline, chosen, specialized, tests):
+    """Consider extra modules when replay CPU costs less than the projected CI saving."""
+    if len(records) == len(baseline) or len(chosen) > 250:
+        return baseline, 0
+    times = _timings()
+    groups = {}
+    existing = {r["number"] for r in baseline}
+    for row in records:
+        measured = times.get(row["file"], {}).get("tests", {})
+        if row["number"] not in existing and row["id"] in measured:
+            groups.setdefault(row["file"], []).append(row)
+    if not groups:
+        return baseline, 0
+    durations = {n: tests[n]["seconds"] for n in chosen}
+    leftover = chosen - existing - specialized
+    before = _schedule_cost(leftover, durations)
+    already_imported = {r["file"] for r in baseline}
+    options = list(groups.values())
+    if len(groups) > 1:
+        options.append([r for items in groups.values() for r in items])
+    best = None
+    for rows in options:
+        if len(rows) > 150:
+            continue
+        modules = {r["file"] for r in rows} - already_imported
+        # Modules share the main SQLGlot import. Estimate its cold cost once.
+        cold = max((times[m]["import"] for m in modules), default=0)
+        fixtures = sum(times[m]["setup"] for m in modules)
+        estimate = cold + fixtures + sum(times[r["file"]]["tests"][r["id"]] for r in rows)
+        if estimate > 1.0:
+            continue
+        gain = before - _schedule_cost(leftover - {r["number"] for r in rows}, durations)
+        payoff = gain - 3.0 * estimate - 0.3
+        if payoff > 0 and (best is None or payoff > best[0]):
+            best = payoff, rows, estimate
+    if best is None:
+        return baseline, 0
+    return baseline + best[1], best[2]
+
+
 def refine(source_root, replacements, candidates, tests, budget=None, effective=None):
     """Remove tests witnessed passing on this patch; uncertainty keeps the test.
 
@@ -214,10 +266,12 @@ def refine(source_root, replacements, candidates, tests, budget=None, effective=
             # Initializing DuckDB and the fixture worker pool costs more than
             # these small selections usually save. Their TPC shards are handled
             # above and count separately from ordinary testcase probes.
+            possible = records
             records = [r for r in records if r["file"] not in (
                 "tests/test_executor.py", "tests/test_optimizer.py")]
             if sum(r["seconds"] for r in records) > 0.85 or len(records) > 120:
                 records = []
+            records, extra_cpu = _expand_plan(possible, records, chosen, specialized, tests)
 
             # Even confirming every planned test can leave the same bottleneck:
             # another long test still needs its worker. Only spend CPU on partial
@@ -226,11 +280,11 @@ def refine(source_root, replacements, candidates, tests, budget=None, effective=
             if planned and chosen - planned:
                 durations = {n: tests[n]["seconds"] for n in chosen}
                 saving = _schedule_cost(chosen, durations) - _schedule_cost(chosen - planned, durations)
-                if saving <= 0.15 + sum(r["seconds"] for r in records):
+                if not extra_cpu and saving <= 0.15 + sum(r["seconds"] for r in records):
                     return chosen
             # The judge charges CPU. A batch competing for a time slice on an
             # emulator should not abandon a fast check merely because of wall time.
-            cpu_limit = 2.6 if shards else 1.0
+            cpu_limit = 2.6 if shards else 1.0 + extra_cpu
             budget = 5.0 if shards else 3.0
         else:
             cpu_limit = budget
